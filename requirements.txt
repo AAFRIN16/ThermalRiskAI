@@ -11,3 +11,4 @@ gdown
 pyyaml
 matplotlib
 pandas
+seaborn
