@@ -15,6 +15,9 @@ from torchvision import transforms
 from src.dataset import load_config
 from src.model import build_model
 from src.ndvii import classify_ndvii
+# Download model files if not present (for cloud deployment)
+from download_models import download_all
+download_all()
 
 app = FastAPI(title="ThermalRiskAI API")
 
