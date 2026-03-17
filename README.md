@@ -1,3 +1,11 @@
+---
+title: ThermalRiskAI
+emoji: 🌡️
+colorFrom: blue
+colorTo: red
+sdk: docker
+pinned: false
+---
 # ThermalRiskAI
 
 **AI-Based Spatial–Temporal Thermal Stability Analysis Platform**
