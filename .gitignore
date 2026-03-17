@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+outputs/models/
+outputs/features/
+outputs/logs/
+data/
+*.pth
+*.npy
+.env
