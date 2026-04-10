@@ -11,15 +11,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from sklearn.preprocessing import StandardScaler
 from torchvision import transforms
+from datetime import datetime
 
 from src.dataset import load_config
 from src.model import build_model
 from src.ndvii import classify_ndvii
-# Download model files if not present (for cloud deployment)
+from src.gradcam import generate_gradcam_overlay
+from src.organ_mapping import compute_organ_status, detect_region_type
+from src.pdf_report import generate_pdf_report
 from download_models import download_all
+
+# Download model files if not present
 download_all()
 
-app = FastAPI(title="ThermalRiskAI API")
+app = FastAPI(title="ThermalRiskAI API v2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,7 +34,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── Load model & data once at startup ────────────────────────────────────────
+# ─── Load model & data ─────────────────────────────────────────────────────────
 cfg = load_config()
 device = torch.device("cpu")
 
@@ -73,7 +78,6 @@ CLASS_NAMES = ["Control Group", "DM Group"]
 def is_valid_thermal_image(image: Image.Image) -> tuple[bool, str]:
     img_array = np.array(image.resize((224, 224)))
 
-    # Must be RGB
     if img_array.ndim != 3 or img_array.shape[2] != 3:
         return False, "Image must be a color (RGB) thermal image."
 
@@ -81,26 +85,22 @@ def is_valid_thermal_image(image: Image.Image) -> tuple[bool, str]:
     g = img_array[:, :, 1].astype(int)
     b = img_array[:, :, 2].astype(int)
 
-    # Thermal images must have sufficient color variance
     color_std = float(np.std(img_array))
     if color_std < 20:
-        return False, "Image appears to have insufficient color variation for thermal analysis."
+        return False, "Image appears to have insufficient color variation. Please upload a valid thermal image."
 
-    # Must not be grayscale
     rg_diff = float(np.mean(np.abs(r - g)))
     gb_diff = float(np.mean(np.abs(g - b)))
     if rg_diff < 8 and gb_diff < 8:
-        return False, "Image appears to be grayscale. Please upload a pseudocolor thermal image."
+        return False, "Image appears to be grayscale. Please upload a pseudocolor thermal image of feet or palm."
 
-    # Must have sufficient non-black area (thermal subject)
     non_black_mask = (img_array.max(axis=2) > 30)
     non_black_ratio = float(non_black_mask.mean())
     if non_black_ratio < 0.05:
         return False, "Image appears to be mostly black. No thermal region detected."
     if non_black_ratio > 0.98:
-        return False, "Image does not appear to be a thermal image (no dark background detected)."
+        return False, "This does not appear to be a thermal image. Please upload a thermal infrared image of feet or palm only."
 
-    # Thermal pseudocolor images have strong channel dominance
     roi_r = float(r[non_black_mask].mean())
     roi_g = float(g[non_black_mask].mean())
     roi_b = float(b[non_black_mask].mean())
@@ -108,7 +108,7 @@ def is_valid_thermal_image(image: Image.Image) -> tuple[bool, str]:
     min_ch = min(roi_r, roi_g, roi_b)
     channel_dominance = max_ch - min_ch
     if channel_dominance < 25:
-        return False, "Image does not appear to be a thermal infrared image. Please upload a valid thermal foot image."
+        return False, "Image does not appear to be a thermal infrared image. Please upload a valid thermal feet or palm image."
 
     return True, "ok"
 
@@ -116,7 +116,7 @@ def is_valid_thermal_image(image: Image.Image) -> tuple[bool, str]:
 # ─── Routes ───────────────────────────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ThermalRiskAI API running"}
+    return {"status": "ThermalRiskAI API v2 running"}
 
 
 @app.get("/health")
@@ -128,12 +128,12 @@ def health():
         "ndvii_accuracy": 0.98,
         "separation_gap": 0.6904,
         "total_samples": int(len(all_labels)),
+        "version": "2.0"
     }
 
 
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
-    # Read image
     contents = await file.read()
     image = Image.open(io.BytesIO(contents)).convert("RGB")
 
@@ -141,6 +141,9 @@ async def analyze(file: UploadFile = File(...)):
     is_valid, reason = is_valid_thermal_image(image)
     if not is_valid:
         raise HTTPException(status_code=422, detail=reason)
+
+    # Detect region type
+    region_type = detect_region_type(image)
 
     # Preprocess
     img_tensor = transform(image).unsqueeze(0).to(device)
@@ -151,7 +154,7 @@ async def analyze(file: UploadFile = File(...)):
 
     features_np = features.cpu().numpy()
 
-    # Project into PSE space
+    # PSE embedding
     features_sc   = scaler.transform(features_np)
     new_embedding = reducer.transform(features_sc)
 
@@ -165,19 +168,23 @@ async def analyze(file: UploadFile = File(...)):
     confidence = float(probs[pred_class])
     stability  = classify_ndvii(ndvii)
 
-    # Simulated temporal data
+    # Grad-CAM
+    try:
+        gradcam_b64, cam_data = generate_gradcam_overlay(model, image, device, transform)
+    except Exception:
+        gradcam_b64 = ""
+        cam_data = []
+
+    # Organ mapping
+    organ_mapping = compute_organ_status(features_np[0], ndvii, region_type)
+
+    # Temporal data
     np.random.seed(int(ndvii * 1000))
     base = ndvii * 100
-    stability_over_time = [
-        round(float(base + np.random.uniform(-8, 8)), 1)
-        for _ in range(8)
-    ]
-    drift_progression = [
-        round(float(abs(np.random.uniform(0, 2.2))), 2)
-        for _ in range(8)
-    ]
+    stability_over_time = [round(float(base + np.random.uniform(-8, 8)), 1) for _ in range(8)]
+    drift_progression   = [round(float(abs(np.random.uniform(0, 2.2))), 2) for _ in range(8)]
 
-    # Heatmap grid from feature vector
+    # Heatmap grid
     feat_sample = features_np[0][:64]
     feat_norm   = (feat_sample - feat_sample.min()) / (feat_sample.max() - feat_sample.min() + 1e-8)
     heatmap_grid = feat_norm.reshape(8, 8).tolist()
@@ -188,7 +195,7 @@ async def analyze(file: UploadFile = File(...)):
     bilateral      = round(ndvii * 0.8, 2)
     gradient_zones = 2 if ndvii < 0.3 else (3 if ndvii < 0.65 else 4)
 
-    return {
+    result = {
         "ndvii": round(ndvii, 4),
         "ndvii_100": round(ndvii * 100, 1),
         "stability_score": round((1 - ndvii) * 100, 1),
@@ -197,6 +204,7 @@ async def analyze(file: UploadFile = File(...)):
         "confidence": round(confidence * 100, 1),
         "drift_indicator": "Stable" if ndvii < 0.55 else "Unstable",
         "instability_index": round(ndvii, 2),
+        "region_type": region_type,
         "embedding": {
             "x": round(float(new_embedding[0][0]), 3),
             "y": round(float(new_embedding[0][1]), 3),
@@ -212,9 +220,18 @@ async def analyze(file: UploadFile = File(...)):
             "drift_progression": drift_progression,
         },
         "heatmap_grid": heatmap_grid,
+        "gradcam_image": gradcam_b64,
+        "organ_mapping": organ_mapping,
         "dataset_embedding": {
             "control": all_embedding[control_mask].tolist(),
             "dm": all_embedding[~control_mask].tolist(),
             "new_point": new_embedding[0].tolist(),
         }
     }
+
+    # Generate PDF
+    session_id = datetime.now().strftime("TRA-%Y%m%d-%H%M%S")
+    result["pdf_report"] = generate_pdf_report(result, session_id)
+    result["session_id"] = session_id
+
+    return result

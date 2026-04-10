@@ -7,14 +7,6 @@ import yaml
 from src.dataset import load_config
 
 
-def load_all(cfg):
-    features_dir = cfg["outputs"]["features_dir"]
-    embedding = np.load(os.path.join(features_dir, "umap_embedding.npy"))
-    ndvii_scores = np.load(os.path.join(features_dir, "ndvii_scores.npy"))
-    all_labels = np.load(os.path.join(features_dir, "all_labels.npy"))
-    return embedding, ndvii_scores, all_labels
-
-
 def classify_ndvii(score):
     if score < 0.30:
         return "Thermally Stable"
@@ -27,19 +19,17 @@ def classify_ndvii(score):
 
 
 def evaluate_ndvii(ndvii_scores, labels):
+    cfg = load_config()
     print("=" * 50)
     print("NDVII EVALUATION")
     print("=" * 50)
 
     class_names = ["Control Group", "DM Group"]
-
-    # Use 0.5 as threshold for binary prediction
     ndvii_preds = (ndvii_scores >= 0.5).astype(int)
 
     print("\nClassification Report:")
     print(classification_report(labels, ndvii_preds, target_names=class_names))
 
-    # Confusion matrix
     cm = confusion_matrix(labels, ndvii_preds)
     fig, ax = plt.subplots(figsize=(6, 5))
     fig.patch.set_facecolor("#0d1320")
@@ -63,38 +53,9 @@ def evaluate_ndvii(ndvii_scores, labels):
     save_path = os.path.join(cfg["outputs"]["features_dir"], "ndvii_confusion_matrix.png")
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"Confusion matrix saved: {save_path}")
-
-    # NDVII distribution plot
-    fig, ax = plt.subplots(figsize=(10, 5))
-    fig.patch.set_facecolor("#0d1320")
-    ax.set_facecolor("#0d1320")
 
     control_scores = ndvii_scores[labels == 0]
     dm_scores = ndvii_scores[labels == 1]
-
-    ax.hist(control_scores, bins=40, color="#00e5ff", alpha=0.7,
-            label="Control Group", edgecolor="none")
-    ax.hist(dm_scores, bins=40, color="#ff4b6e", alpha=0.7,
-            label="DM Group", edgecolor="none")
-
-    ax.axvline(x=0.5, color="white", linestyle="--",
-               linewidth=1.5, label="Threshold (0.5)")
-
-    ax.set_title("NDVII Score Distribution", color="white", fontsize=13, pad=12)
-    ax.set_xlabel("NDVII Score", color="#5a7090")
-    ax.set_ylabel("Count", color="#5a7090")
-    ax.tick_params(colors="#5a7090")
-    for spine in ax.spines.values():
-        spine.set_edgecolor("#1e2d47")
-
-    legend = ax.legend(facecolor="#131b2e", edgecolor="#1e2d47", labelcolor="white")
-    plt.tight_layout()
-
-    dist_path = os.path.join(cfg["outputs"]["features_dir"], "ndvii_distribution.png")
-    plt.savefig(dist_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"Distribution plot saved: {dist_path}")
 
     print("=" * 50)
     print("NDVII Summary:")
@@ -106,5 +67,7 @@ def evaluate_ndvii(ndvii_scores, labels):
 
 if __name__ == "__main__":
     cfg = load_config()
-    embedding, ndvii_scores, labels = load_all(cfg)
+    from src.embedding import load_features
+    features, labels = load_features(cfg)
+    ndvii_scores = np.load(os.path.join(cfg["outputs"]["features_dir"], "ndvii_scores.npy"))
     evaluate_ndvii(ndvii_scores, labels)
