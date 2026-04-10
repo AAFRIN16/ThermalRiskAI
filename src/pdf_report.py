@@ -127,7 +127,7 @@ def generate_pdf_report(analysis_result, session_id=None):
 
     info_data = [
         ["Session ID", sid, "Date", now],
-        ["Region Analyzed", region, "Model", "EfficientNet-B0 + UMAP PSE"],
+        ["Model", "EfficientNet-B0 + UMAP PSE", "", ""],
     ]
 
     info_table = Table(info_data, colWidths=[35*mm, 65*mm, 25*mm, 55*mm])
