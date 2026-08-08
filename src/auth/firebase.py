@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import firebase_admin
 from firebase_admin import credentials, auth
@@ -9,13 +10,20 @@ logger = logging.getLogger(__name__)
 if not firebase_admin._apps:
     try:
         cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        hf_secret = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+
         if cred_path and os.path.exists(cred_path):
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred)
-            logger.info("Firebase Admin SDK initialized with credentials file: %s", cred_path)
+            logger.info("Firebase Admin SDK initialized using local credentials file: %s", cred_path)
+        elif hf_secret:
+            parsed_json = json.loads(hf_secret)
+            cred = credentials.Certificate(parsed_json)
+            firebase_admin.initialize_app(cred)
+            logger.info("Firebase Admin SDK initialized using Hugging Face Secret.")
         else:
             firebase_admin.initialize_app()
-            logger.info("Firebase Admin SDK initialized with default credentials.")
+            logger.info("Firebase Admin SDK initialized using default credentials.")
     except Exception as e:
         logger.warning("Firebase Admin SDK initialization warning: %s", e)
 
