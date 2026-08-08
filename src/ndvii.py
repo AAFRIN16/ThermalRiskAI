@@ -71,3 +71,4 @@ if __name__ == "__main__":
     features, labels = load_features(cfg)
     ndvii_scores = np.load(os.path.join(cfg["outputs"]["features_dir"], "ndvii_scores.npy"))
     evaluate_ndvii(ndvii_scores, labels)
+    

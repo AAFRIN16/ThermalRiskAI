@@ -6,7 +6,7 @@ import io
 import numpy as np
 import torch
 import umap
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from sklearn.preprocessing import StandardScaler
@@ -19,6 +19,10 @@ from src.ndvii import classify_ndvii
 from src.gradcam import generate_gradcam_overlay
 from src.organ_mapping import compute_organ_status, detect_region_type
 from src.pdf_report import generate_pdf_report
+from src.auth.dependencies import get_current_user
+from src.db.database import upsert_user, save_scan, get_user_scans
+from src.models.scan import ThermalScanModel
+from src.services.digital_twin import DigitalTwinService
 from download_models import download_all
 
 # Download model files if not present
@@ -133,7 +137,14 @@ def health():
 
 
 @app.post("/analyze")
-async def analyze(file: UploadFile = File(...)):
+@app.post("/api/upload")
+async def analyze(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    # Ensure user record is registered/updated in database
+    user = upsert_user(current_user)
+
     contents = await file.read()
     image = Image.open(io.BytesIO(contents)).convert("RGB")
 
@@ -234,4 +245,49 @@ async def analyze(file: UploadFile = File(...)):
     result["pdf_report"] = generate_pdf_report(result, session_id)
     result["session_id"] = session_id
 
+    # Persist thermal scan for authenticated user
+    wellness_score = round((1 - ndvii) * 100, 1)
+    scan_record = ThermalScanModel(
+        scanId=session_id,
+        userId=user.uid,
+        timestamp=datetime.utcnow().isoformat(),
+        uploadedImage=file.filename or "thermal_image.jpg",
+        prediction={
+            "predicted_class": CLASS_NAMES[pred_class],
+            "confidence": round(confidence * 100, 1)
+        },
+        NDVII={
+            "ndvii": round(ndvii, 4),
+            "stability_score": round((1 - ndvii) * 100, 1),
+            "stability_label": stability
+        },
+        OrganMapping=organ_mapping,
+        GradCAM=gradcam_b64,
+        WellnessScore=wellness_score
+    )
+    save_scan(scan_record)
+
     return result
+
+
+@app.get("/api/history")
+def get_scan_history(current_user: dict = Depends(get_current_user)):
+    """
+    Returns scan history for the authenticated user.
+    """
+    scans = get_user_scans(current_user["uid"])
+    return {
+        "user_id": current_user["uid"],
+        "total_scans": len(scans),
+        "history": [scan.model_dump() for scan in scans]
+    }
+
+
+@app.get("/api/digital-twin")
+def get_digital_twin(current_user: dict = Depends(get_current_user)):
+    """
+    Computes and returns Digital Twin metrics and history for the authenticated user.
+    """
+    scans = get_user_scans(current_user["uid"])
+    digital_twin_data = DigitalTwinService.compute_digital_twin(current_user["uid"], scans)
+    return digital_twin_data

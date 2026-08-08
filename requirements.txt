@@ -14,3 +14,4 @@ pandas
 seaborn
 reportlab
 opencv-python-headless
+firebase-admin

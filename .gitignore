@@ -10,3 +10,4 @@ data/
 *.pth
 *.npy
 .env
+firebase-admin.json
